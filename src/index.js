@@ -1,9 +1,15 @@
 // index.js — точка входа Cloudflare Worker.
-// Сейчас: проверка связи с Google Sheets (чтение). Остальная бизнес-логика
-// (разбор исключений, стикеры и т.д.) переносится следующими шагами, после
-// того как эта основа подтверждённо работает.
+// Чтение Google Sheets подтверждено рабочим (/test-sheets). Запись (sheets.js)
+// добавлена, но ЕЩЁ НИГДЕ не вызывается на реальную запись автоматически —
+// /test-sheets-write делает только DRY RUN (показывает, что было бы записано,
+// ничего не меняя в таблице).
 
 import { getGoogleAccessToken } from './google-auth.js';
+import { batchGetRanges } from './sheets.js';
+
+// Для записи нужен полный доступ. Чтобы не получать два разных access token
+// без необходимости, читаем и пишем одним и тем же токеном с этим scope.
+const WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 
 // CORS — фронтенд (пока это может быть тот же Index.html, только с другим
 // адресом сервера вместо google.script.run) будет дёргать Worker с другого
@@ -21,21 +27,6 @@ function json(data, status) {
   });
 }
 
-// Читает НЕСКОЛЬКО диапазонов ОДНИМ вызовом (как batchGet в Apps Script) —
-// тот же принцип, тот же самый REST-эндпоинт Sheets API, просто вызванный
-// напрямую по HTTPS вместо обёртки Sheets.Spreadsheets.Values.batchGet().
-async function batchGetRanges(accessToken, spreadsheetId, ranges) {
-  const url = new URL('https://sheets.googleapis.com/v4/spreadsheets/' + spreadsheetId + '/values:batchGet');
-  ranges.forEach((r) => url.searchParams.append('ranges', r));
-  url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
-  const resp = await fetch(url.toString(), {
-    headers: { Authorization: 'Bearer ' + accessToken },
-  });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error('Sheets API batchGet failed: ' + resp.status + ' ' + JSON.stringify(data));
-  return data;
-}
-
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
@@ -48,14 +39,40 @@ export default {
       // Проверочный маршрут: /test-sheets — подтверждает, что связь с Google
       // Sheets работает целиком (JWT → токен → чтение реального диапазона).
       if (url.pathname === '/test-sheets') {
-        const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+        const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON, WRITE_SCOPE);
         const data = await batchGetRanges(accessToken, env.SPREADSHEET_ID, [
           "'Ингредиенты'!A1:E5", // маленький кусок для проверки — 5 строк из "Ингредиенты"
         ]);
         return json({ ok: true, sample: data });
       }
 
-      return json({ ok: true, message: 'Green City Worker жив. Доступные маршруты: /test-sheets' });
+      // Безопасная проверка записи: НИЧЕГО не пишет в таблицу. Показывает,
+      // какой диапазон, какое текущее значение и что БЫЛО БЫ записано, если
+      // вызвать updateRange/appendRows/batchUpdateValues из sheets.js.
+      // Реальная тестовая запись делается только вручную, после того как
+      // диапазон/значение/изменение явно показаны и подтверждены в чате.
+      if (url.pathname === '/test-sheets-write') {
+        const targetRange = url.searchParams.get('range') || "'Ингредиенты'!H1";
+        const proposedValue = url.searchParams.get('value') || ('TEST_' + Date.now());
+
+        const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON, WRITE_SCOPE);
+        const current = await batchGetRanges(accessToken, env.SPREADSHEET_ID, [targetRange]);
+        const currentValues = (current.valueRanges && current.valueRanges[0] && current.valueRanges[0].values) || [];
+
+        return json({
+          ok: true,
+          dryRun: true,
+          message: 'Это ПРЕДПРОСМОТР. В таблицу ничего не записано.',
+          range: targetRange,
+          currentValue: currentValues,
+          proposedValue: [[proposedValue]],
+        });
+      }
+
+      return json({
+        ok: true,
+        message: 'Green City Worker жив. Доступные маршруты: /test-sheets, /test-sheets-write (dry run)',
+      });
     } catch (e) {
       return json({ ok: false, error: String((e && e.message) || e) }, 500);
     }
