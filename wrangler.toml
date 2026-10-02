@@ -1,0 +1,10 @@
+name = "green-city-api"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# SPREADSHEET_ID — не секрет (просто id таблицы в её URL), можно хранить тут открыто.
+[vars]
+SPREADSHEET_ID = "1O7ilkMyIRUhDGl0MIPbUJ1su6cEhy2nBOUF2_jezkHQ"
+
+# GOOGLE_SERVICE_ACCOUNT_JSON — СЕКРЕТ (содержит приватный ключ), сюда НЕ пишем.
+# Задаётся отдельной командой (см. README.md), хранится у Cloudflare зашифрованным.
